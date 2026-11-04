@@ -1,0 +1,58 @@
+name: VinAI CPU Inference
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "Pertanyaan untuk VinAI"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  infer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git
+
+      - name: Build llama.cpp
+        run: |
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
+          cmake -S llama.cpp -B llama.cpp/build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF
+          cmake --build llama.cpp/build --config Release --target llama-cli -j2
+
+      - name: Download model
+        run: |
+          python -m pip install --upgrade huggingface_hub
+          hf download bartowski/Qwen2.5-Coder-3B-Instruct-GGUF Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf --local-dir model
+
+      - name: Run inference
+        env:
+          PROMPT: ${{ inputs.prompt }}
+        run: |
+          ./llama.cpp/build/bin/llama-cli \
+            --model model/Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf \
+            --prompt "$PROMPT" \
+            --n-predict 512 \
+            --ctx-size 4096 \
+            --temp 0.7 \
+            --no-display-prompt \
+            > response.txt 2>&1
+          cat response.txt
+
+      - name: Upload response
+        uses: actions/upload-artifact@v4
+        with:
+          name: vinai-response-${{ github.run_id }}
+          path: response.txt
+          retention-days: 1
