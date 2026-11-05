@@ -67,7 +67,17 @@ def put_file(path, content, message, sha=None):
     }
     if sha:
         payload["sha"] = sha
-    api("PUT", f"/contents/{quote(path, safe='/')}", json=payload)
+    url = API + f"/contents/{quote(path, safe='/')}"
+    for attempt in range(5):
+        response = requests.put(url, headers=HEADERS, json=payload, timeout=90)
+        if response.status_code < 400:
+            return
+        if response.status_code == 409 and attempt < 4:
+            time.sleep(2 + attempt * 2)
+            continue
+        raise RuntimeError(
+            f"GitHub API {response.status_code}: {response.text[:400]}"
+        )
 
 
 def enqueue(prompt, model, reasoning):
