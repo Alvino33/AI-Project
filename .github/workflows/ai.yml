@@ -1,12 +1,33 @@
-name: VinAI CPU Inference
+name: VinAI Inference
+
+run-name: VinAI request ${{ inputs.request_id }}
 
 on:
   workflow_dispatch:
     inputs:
       prompt:
-        description: "Pertanyaan untuk VinAI"
+        description: "Prompt untuk VinAI"
         required: true
         type: string
+      request_id:
+        description: "ID internal untuk mencocokkan jawaban"
+        required: true
+        type: string
+      model:
+        description: "Model yang digunakan"
+        required: true
+        type: choice
+        options:
+          - gpt-oss-20b
+          - qwen-3b
+      reasoning:
+        description: "Tingkat reasoning GPT-OSS"
+        required: true
+        type: choice
+        options:
+          - low
+          - medium
+          - high
 
 permissions:
   contents: read
@@ -14,45 +35,87 @@ permissions:
 
 jobs:
   infer:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Public-repository standard Linux runners currently provide 4 vCPU / 16 GB RAM.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install build dependencies
+      - name: Check runner tools and disk
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake git
+          set -e
+          cmake --version
+          git --version
+          c++ --version
+          df -h /
 
       - name: Build llama.cpp
         run: |
+          set -e
           git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
-          cmake -S llama.cpp -B llama.cpp/build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF
+          cmake -S llama.cpp -B llama.cpp/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_NATIVE=OFF \
+            -DGGML_OPENMP=ON
           cmake --build llama.cpp/build --config Release --target llama-cli -j2
+          mkdir -p /tmp/llama-bin
+          cp -a llama.cpp/build/bin/. /tmp/llama-bin/
+          rm -rf llama.cpp
+          df -h /
 
-      - name: Download model
+      - name: Download selected model
+        env:
+          MODEL: ${{ inputs.model }}
         run: |
-          python -m pip install --upgrade huggingface_hub
-          hf download bartowski/Qwen2.5-Coder-3B-Instruct-GGUF Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf --local-dir model
+          set -e
+          python -m pip install --disable-pip-version-check --no-cache-dir huggingface_hub
+          mkdir -p model
+          if [ "$MODEL" = "gpt-oss-20b" ]; then
+            hf download ggml-org/gpt-oss-20b-GGUF gpt-oss-20b-MXFP4.gguf --local-dir model
+          elif [ "$MODEL" = "qwen-3b" ]; then
+            hf download bartowski/Qwen2.5-Coder-3B-Instruct-GGUF Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf --local-dir model
+          else
+            echo "Model tidak dikenal: $MODEL"
+            exit 1
+          fi
+          df -h /
 
-      - name: Run inference
+      - name: Run inference and write answer to job log
         env:
           PROMPT: ${{ inputs.prompt }}
+          MODEL: ${{ inputs.model }}
+          REASONING: ${{ inputs.reasoning }}
+          REQUEST_ID: ${{ inputs.request_id }}
+        shell: bash
         run: |
-          ./llama.cpp/build/bin/llama-cli \
-            --model model/Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf \
+          set +e
+          SYSTEM_PROMPT="You are VinAI, a helpful AI assistant. Always answer in Indonesian unless the user asks for another language. Be accurate, clear, and concise."
+          if [ "$MODEL" = "gpt-oss-20b" ]; then
+            MODEL_PATH="model/gpt-oss-20b-MXFP4.gguf"
+            EXTRA_ARGS=(--jinja --chat-template-kwargs "{\"reasoning_effort\":\"$REASONING\"}")
+          else
+            MODEL_PATH="model/Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf"
+            EXTRA_ARGS=(--jinja)
+          fi
+
+          timeout 35m /tmp/llama-bin/llama-cli \
+            --model "$MODEL_PATH" \
+            "${EXTRA_ARGS[@]}" \
+            --system-prompt "$SYSTEM_PROMPT" \
             --prompt "$PROMPT" \
             --n-predict 512 \
             --ctx-size 4096 \
-            --temp 0.7 \
+            --temp 1.0 \
+            --simple-io \
             --no-display-prompt \
-            > response.txt 2>&1
-          cat response.txt
+            > /tmp/vinai-response.txt 2>&1
+          CODE=$?
 
-      - name: Upload response
-        uses: actions/upload-artifact@v4
-        with:
-          name: vinai-response-${{ github.run_id }}
-          path: response.txt
-          retention-days: 1
+          echo "VINAI_RESULT_BEGIN:$REQUEST_ID"
+          cat /tmp/vinai-response.txt
+          echo
+          echo "VINAI_RESULT_END:$REQUEST_ID"
+          echo "VinAI inference exit code: $CODE"
+          # Keep the job successful so the client can always retrieve diagnostic logs.
+          exit 0
