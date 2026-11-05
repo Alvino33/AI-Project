@@ -78,22 +78,15 @@ jobs:
 
       - name: Start model server and process queue
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           QUEUE_BRANCH: feature/gpt-oss-20b-terminal
           MODEL: ${{ inputs.model }}
           REASONING: ${{ inputs.reasoning }}
         run: |
           set -e
-          SERVER_ARGS=()
-          if [ "$MODEL" = "gpt-oss-20b" ]; then
-            SERVER_ARGS+=(--jinja --chat-template-kwargs "{\"reasoning_effort\":\"$REASONING\"}")
-          else
-            SERVER_ARGS+=(--jinja)
-          fi
           /tmp/llama-bin/llama-server \
             --model "$MODEL_PATH" \
-            "${SERVER_ARGS[@]}" \
+            --jinja \
             --host 127.0.0.1 \
             --port 8080 \
             --ctx-size 4096 \
