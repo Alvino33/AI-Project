@@ -1,66 +1,52 @@
-name: VinAI Inference
+name: VinAI Queue Worker
 
-run-name: VinAI request ${{ inputs.request_id || format('push-{0}', github.run_id) }}
+run-name: VinAI Queue Worker (\${{ inputs.model || 'gpt-oss-20b' }})
 
 on:
-  push:
-    branches:
-      - feature/gpt-oss-20b-terminal
-    paths:
-      - '.github/workflows/ai.yml'
-      - 'vinai.py'
   workflow_dispatch:
     inputs:
-      prompt:
-        description: "Prompt untuk VinAI"
-        required: true
-        type: string
-      request_id:
-        description: "ID internal untuk mencocokkan jawaban"
-        required: true
-        type: string
       model:
-        description: "Model yang digunakan"
+        description: "Model yang dimuat untuk sesi worker ini"
         required: true
         type: choice
+        default: gpt-oss-20b
         options:
           - gpt-oss-20b
           - qwen-3b
       reasoning:
-        description: "Tingkat reasoning GPT-OSS"
+        description: "Reasoning GPT-OSS"
         required: true
         type: choice
+        default: medium
         options:
           - low
           - medium
           - high
 
 permissions:
-  contents: read
-  actions: read
+  contents: write
+
+concurrency:
+  group: vinai-queue-worker
+  cancel-in-progress: false
 
 jobs:
-  infer:
+  worker:
     runs-on: ubuntu-24.04
-    timeout-minutes: 55
+    timeout-minutes: 350
     steps:
-      - name: Checkout
+      - name: Checkout queue branch
         uses: actions/checkout@v4
+        with:
+          ref: feature/gpt-oss-20b-terminal
+          fetch-depth: 1
 
-      - name: Free disk space for the large model
+      - name: Free disk space
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/share/chromium
           df -h /
 
-      - name: Check runner tools and disk
-        run: |
-          set -e
-          cmake --version
-          git --version
-          c++ --version
-          df -h /
-
-      - name: Build llama.cpp
+      - name: Build llama.cpp server once
         run: |
           set -e
           git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
@@ -68,63 +54,50 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_NATIVE=OFF \
             -DGGML_OPENMP=ON
-          cmake --build llama.cpp/build --config Release --target llama-cli -j2
+          cmake --build llama.cpp/build --config Release --target llama-server -j2
           mkdir -p /tmp/llama-bin
-          cp -a llama.cpp/build/bin/. /tmp/llama-bin/
+          cp llama.cpp/build/bin/llama-server /tmp/llama-bin/
           rm -rf llama.cpp
           df -h /
 
-      - name: Download selected model
+      - name: Download model once
         env:
-          MODEL: ${{ inputs.model || 'gpt-oss-20b' }}
+          MODEL: \${{ inputs.model }}
         run: |
           set -e
           python -m pip install --disable-pip-version-check --no-cache-dir huggingface_hub
           mkdir -p model
           if [ "$MODEL" = "gpt-oss-20b" ]; then
             hf download ggml-org/gpt-oss-20b-GGUF gpt-oss-20b-MXFP4.gguf --local-dir model
-          elif [ "$MODEL" = "qwen-3b" ]; then
-            hf download bartowski/Qwen2.5-Coder-3B-Instruct-GGUF Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf --local-dir model
+            echo "MODEL_PATH=model/gpt-oss-20b-MXFP4.gguf" >> "$GITHUB_ENV"
           else
-            echo "Model tidak dikenal: $MODEL"
-            exit 1
+            hf download bartowski/Qwen2.5-Coder-3B-Instruct-GGUF Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf --local-dir model
+            echo "MODEL_PATH=model/Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf" >> "$GITHUB_ENV"
           fi
           df -h /
 
-      - name: Run inference and write answer to job log
+      - name: Start model server and process queue
         env:
-          PROMPT: ${{ inputs.prompt || 'Tes awal VinAI - jelaskan secara singkat apa itu GPT-OSS 20B.' }}
-          MODEL: ${{ inputs.model || 'gpt-oss-20b' }}
-          REASONING: ${{ inputs.reasoning || 'medium' }}
-          REQUEST_ID: ${{ inputs.request_id || github.run_id }}
-        shell: bash
+          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: \${{ github.repository }}
+          QUEUE_BRANCH: feature/gpt-oss-20b-terminal
+          MODEL: \${{ inputs.model }}
+          REASONING: \${{ inputs.reasoning }}
         run: |
-          set +e
-          SYSTEM_PROMPT="You are VinAI, a helpful AI assistant. Always answer in Indonesian unless the user asks for another language. Be accurate, clear, and concise."
+          set -e
+          SERVER_ARGS=()
           if [ "$MODEL" = "gpt-oss-20b" ]; then
-            MODEL_PATH="model/gpt-oss-20b-MXFP4.gguf"
-            EXTRA_ARGS=(--jinja --chat-template-kwargs "{\\"reasoning_effort\\":\\"$REASONING\\"}")
+            SERVER_ARGS+=(--jinja --chat-template-kwargs "{\\"reasoning_effort\\":\\"$REASONING\\"}")
           else
-            MODEL_PATH="model/Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf"
-            EXTRA_ARGS=(--jinja)
+            SERVER_ARGS+=(--jinja)
           fi
-
-          timeout 35m /tmp/llama-bin/llama-cli \
+          /tmp/llama-bin/llama-server \
             --model "$MODEL_PATH" \
-            "${EXTRA_ARGS[@]}" \
-            --system-prompt "$SYSTEM_PROMPT" \
-            --prompt "$PROMPT" \
-            --n-predict 512 \
+            "\${SERVER_ARGS[@]}" \
+            --host 127.0.0.1 \
+            --port 8080 \
             --ctx-size 4096 \
-            --temp 1.0 \
-            --simple-io \
-            --no-display-prompt \
-            > /tmp/vinai-response.txt 2>&1
-          CODE=$?
-
-          echo "VINAI_RESULT_BEGIN:$REQUEST_ID"
-          cat /tmp/vinai-response.txt
-          echo
-          echo "VINAI_RESULT_END:$REQUEST_ID"
-          echo "VinAI inference exit code: $CODE"
-          exit 0
+            > /tmp/vinai-server.log 2>&1 &
+          echo $! > /tmp/vinai-server.pid
+          python -m pip install --disable-pip-version-check --no-cache-dir requests
+          python worker.py
