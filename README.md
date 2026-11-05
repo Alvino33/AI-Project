@@ -1,41 +1,59 @@
 # VinAI
 
-Prototipe AI terminal pribadi. Client berjalan di Termux, sedangkan inferensi dijalankan oleh GitHub Actions.
+Prototipe AI terminal pribadi. Terminal berjalan di Termux/VPS, sedangkan inferensi dijalankan oleh satu worker GitHub Actions yang memproses antrean.
+
+## Cara kerja antrean
+
+- Terminal menyimpan setiap prompt sebagai `requests/<request_id>.json`.
+- Satu workflow **VinAI Queue Worker** memuat model sekali, lalu memantau folder antrean.
+- Worker memproses request satu per satu dan menyimpan jawaban ke `results/<request_id>.json`.
+- Request yang sudah punya file hasil akan dilewati saat worker dimulai ulang.
+- Antrean tetap tersimpan di branch ini ketika sesi worker berakhir.
+
+## Menjalankan worker
+
+1. Buka tab **Actions** repository.
+2. Pilih workflow **VinAI Queue Worker**.
+3. Tekan **Run workflow**.
+4. Pilih model dan reasoning, lalu jalankan.
+5. Tunggu sampai langkah model server siap/worker aktif.
+6. Jalankan terminal VinAI. Pastikan pilihan `/model` sama dengan model yang dipilih saat worker dimulai.
+
+Worker tidak otomatis dimulai setiap kali prompt dikirim. Jalankan satu worker terlebih dahulu, lalu kirim banyak prompt selama sesi worker aktif. Saat job mencapai batas waktu, jalankan workflow lagi untuk melanjutkan antrean.
 
 ## Fitur terminal
 
 - `/help` — daftar perintah
 - `/exit` — keluar
 - `/clear` — bersihkan layar
-- `/model` — lihat model aktif
+- `/model` — lihat model terminal
 - `/model gpt-oss-20b` — pilih GPT-OSS 20B MXFP4
 - `/model qwen-3b` — pilih Qwen2.5-Coder 3B Q4_K_M
 - `/reasoning low|medium|high` — atur reasoning GPT-OSS
 - `/status` — lihat konfigurasi
-
-Setiap prompt memicu satu workflow baru. Client mencocokkan workflow menggunakan request ID, lalu membaca jawaban dari log GitHub Actions langsung ke terminal. Tidak ada artifact jawaban atau file ZIP yang disimpan ke perangkat; arsip log dibaca sementara di memori.
 
 ## Setup Termux
 
 ```bash
 pkg update
 pkg install python
-pip install -r requirements.txt
+pip install requests
 export GITHUB_TOKEN="TOKEN_MILIK_LO"
 python vinai.py
 ```
 
-Buat fine-grained Personal Access Token khusus repository ini dengan izin **Actions: Read and write** dan **Metadata: Read-only**. Jangan kirim token ke chat, jangan commit token ke repository, dan jangan menaruhnya di source code.
+Buat fine-grained Personal Access Token khusus repository ini dengan izin **Contents: Read and write** dan **Metadata: Read-only**. Terminal tidak perlu izin Actions. Jangan kirim token ke chat, jangan commit token ke repository, dan jangan menaruhnya di source code.
 
-## Catatan penting untuk GPT-OSS 20B
+## Catatan penting
 
-- Model memakai file GGUF MXFP4 sekitar 12 GB.
-- Workflow menggunakan runner Linux standar untuk repository publik (spesifikasi runner dapat berubah).
-- Runner standar memiliki ruang disk terbatas. Walaupun RAM runner publik tercantum 16 GB, GPT-OSS 20B tetap eksperimental di runner ini: unduhan model bisa kehabisan disk, inferensi bisa kehabisan RAM, dan CPU-only bisa sangat lambat.
-- Jika GPT-OSS gagal karena resource, pilih `/model qwen-3b` untuk pengujian yang lebih ringan.
-- Perintah `/reasoning` diterapkan pada GPT-OSS; Qwen mengabaikannya.
-- Riwayat percakapan belum disimpan. `/clear` hanya membersihkan layar terminal.
-- Jawaban diambil dari log workflow. Jangan masukkan password, token, data pribadi, atau source code rahasia. Repository ini public.
+- Repository dan isi folder `requests/` serta `results/` bersifat public. Jangan masukkan password, token, data pribadi, atau source code rahasia.
+- Satu worker hanya memuat satu model selama sesi berjalan. Pilihan model di terminal harus sama dengan pilihan model saat worker dimulai.
+- Workflow memakai runner Linux standar dan membangun `llama.cpp` serta mengunduh model satu kali pada awal sesi.
+- GPT-OSS 20B MXFP4 berukuran sekitar 12 GB. Walaupun runner publik memiliki resource yang lebih besar daripada VPS kecil, inferensi tetap eksperimental: model bisa gagal dimuat karena RAM/disk atau berjalan sangat lambat di CPU.
+- Jika GPT-OSS gagal dimuat, coba jalankan worker dengan Qwen2.5-Coder 3B.
+- Satu job GitHub-hosted punya batas durasi. Worker berhenti sebelum batas job, dan antrean yang belum selesai bisa diproses sesi berikutnya.
+- Riwayat chat tidak dikirim sebagai konteks percakapan; setiap prompt diproses secara terpisah.
+- Hasil disimpan sebagai file JSON di branch ini dan menambah commit ke riwayat repository.
 
 ## Model dan runtime
 
