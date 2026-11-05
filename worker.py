@@ -11,6 +11,7 @@ import requests
 TOKEN = os.environ["GITHUB_TOKEN"]
 REPOSITORY = os.environ["GITHUB_REPOSITORY"]
 BRANCH = os.environ.get("QUEUE_BRANCH", "feature/gpt-oss-20b-terminal")
+ACTIVE_MODEL = os.environ.get("MODEL", "gpt-oss-20b")
 MODEL_URL = "http://127.0.0.1:8080/v1/chat/completions"
 API = f"https://api.github.com/repos/{REPOSITORY}"
 HEADERS = {
@@ -23,7 +24,7 @@ SYSTEM_PROMPT = (
     "unless the user asks for another language. Be accurate, clear, and concise."
 )
 STARTED = time.monotonic()
-MAX_SECONDS = 345 * 60
+MAX_SECONDS = 320 * 60
 
 
 def github(method, path, **kwargs):
@@ -102,7 +103,7 @@ def wait_for_model():
         try:
             response = requests.get("http://127.0.0.1:8080/health", timeout=5)
             if response.ok:
-                print("Model server siap.")
+                print(f"Model server siap: {ACTIVE_MODEL}")
                 return
         except requests.RequestException:
             pass
@@ -113,18 +114,28 @@ def wait_for_model():
 def infer(request):
     request_id = request["request_id"]
     prompt = request["prompt"]
-    model = request.get("model", "gpt-oss-20b")
+    requested_model = request.get("model", ACTIVE_MODEL)
     reasoning = request.get("reasoning", "medium")
+    if requested_model != ACTIVE_MODEL:
+        return {
+            "request_id": request_id,
+            "status": "error",
+            "answer": (
+                f"Worker sedang memakai {ACTIVE_MODEL}; request meminta "
+                f"{requested_model}. Samakan model terminal dengan model worker."
+            ),
+        }
     payload = {
-        "model": model,
+        "model": ACTIVE_MODEL,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
         "temperature": 1.0,
         "max_tokens": 512,
-        "chat_template_kwargs": {"reasoning_effort": reasoning},
     }
+    if ACTIVE_MODEL == "gpt-oss-20b":
+        payload["chat_template_kwargs"] = {"reasoning_effort": reasoning}
     response = requests.post(MODEL_URL, json=payload, timeout=2400)
     response.raise_for_status()
     data = response.json()
@@ -132,7 +143,7 @@ def infer(request):
     return {
         "request_id": request_id,
         "status": "completed",
-        "model": model,
+        "model": ACTIVE_MODEL,
         "reasoning": reasoning,
         "answer": answer,
         "created_at": request.get("created_at"),
@@ -154,21 +165,21 @@ def main():
                     continue
                 request = read_json(item["path"])
                 if not isinstance(request.get("prompt"), str) or not request["prompt"].strip():
-                    save_result(request_id, {
-                        "request_id": request_id,
-                        "status": "error",
-                        "answer": "Prompt kosong atau format request tidak valid.",
-                    })
-                    continue
-                print(f"Memproses request {request_id}")
-                try:
-                    result = infer(request)
-                except Exception as exc:
                     result = {
                         "request_id": request_id,
                         "status": "error",
-                        "answer": f"Inference gagal: {type(exc).__name__}: {str(exc)[:500]}",
+                        "answer": "Prompt kosong atau format request tidak valid.",
                     }
+                else:
+                    print(f"Memproses request {request_id}")
+                    try:
+                        result = infer(request)
+                    except Exception as exc:
+                        result = {
+                            "request_id": request_id,
+                            "status": "error",
+                            "answer": f"Inference gagal: {type(exc).__name__}: {str(exc)[:500]}",
+                        }
                 save_result(request_id, result)
                 handled += 1
                 print(f"Request {request_id}: {result['status']}")
