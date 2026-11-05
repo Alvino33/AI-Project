@@ -56,7 +56,12 @@ jobs:
             -DGGML_OPENMP=ON
           cmake --build llama.cpp/build --config Release --target llama-server -j2
           mkdir -p /tmp/llama-bin
-          cp llama.cpp/build/bin/llama-server /tmp/llama-bin/
+          # Copy the server and its companion shared libraries.
+          cp -a llama.cpp/build/bin/. /tmp/llama-bin/
+          echo "/tmp/llama-bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=/tmp/llama-bin:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          test -f /tmp/llama-bin/llama-server
+          test -f /tmp/llama-bin/libllama-server-impl.so
           rm -rf llama.cpp
           df -h /
 
