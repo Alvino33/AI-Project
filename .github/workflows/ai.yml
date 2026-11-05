@@ -93,7 +93,7 @@ jobs:
 
       - name: Run inference and write answer to job log
         env:
-          PROMPT: ${{ inputs.prompt || 'Tes awal VinAI: jelaskan secara singkat apa itu GPT-OSS 20B.' }}
+          PROMPT: ${{ inputs.prompt || 'Tes awal VinAI - jelaskan secara singkat apa itu GPT-OSS 20B.' }}
           MODEL: ${{ inputs.model || 'gpt-oss-20b' }}
           REASONING: ${{ inputs.reasoning || 'medium' }}
           REQUEST_ID: ${{ inputs.request_id || github.run_id }}
