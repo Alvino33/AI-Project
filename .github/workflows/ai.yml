@@ -93,4 +93,14 @@ jobs:
             > /tmp/vinai-server.log 2>&1 &
           echo $! > /tmp/vinai-server.pid
           python -m pip install --disable-pip-version-check --no-cache-dir requests
-          python worker.py
+          if ! python worker.py; then
+            echo "===== LOG LLAMA-SERVER (120 BARIS TERAKHIR) ====="
+            tail -n 120 /tmp/vinai-server.log || true
+            echo "===== STATUS PROSES LLAMA-SERVER ====="
+            if kill -0 "$(cat /tmp/vinai-server.pid)" 2>/dev/null; then
+              echo "llama-server masih berjalan tetapi belum health-ready"
+            else
+              echo "llama-server sudah berhenti/crash"
+            fi
+            exit 1
+          fi
