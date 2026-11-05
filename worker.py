@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent
 QUEUE_DIR = ROOT / "requests"
 RESULT_DIR = ROOT / "results"
 STARTED = time.monotonic()
-MAX_SECONDS = 320 * 60
+MAX_SECONDS = 300 * 60
 SYSTEM_PROMPT = (
     "You are VinAI, a helpful AI assistant. Always answer in Indonesian "
     "unless the user asks for another language. Be accurate, clear, and concise."
