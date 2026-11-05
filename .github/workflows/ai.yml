@@ -1,8 +1,14 @@
 name: VinAI Inference
 
-run-name: VinAI request ${{ inputs.request_id }}
+run-name: VinAI request ${{ inputs.request_id || format('push-{0}', github.run_id) }}
 
 on:
+  push:
+    branches:
+      - feature/gpt-oss-20b-terminal
+    paths:
+      - '.github/workflows/ai.yml'
+      - 'vinai.py'
   workflow_dispatch:
     inputs:
       prompt:
@@ -35,7 +41,6 @@ permissions:
 
 jobs:
   infer:
-    # Public-repository standard Linux runners currently provide 4 vCPU / 16 GB RAM.
     runs-on: ubuntu-24.04
     timeout-minutes: 55
     steps:
@@ -44,7 +49,6 @@ jobs:
 
       - name: Free disk space for the large model
         run: |
-          # Remove optional preinstalled SDKs; this job only needs Python and C++ tools.
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/share/chromium
           df -h /
 
@@ -72,7 +76,7 @@ jobs:
 
       - name: Download selected model
         env:
-          MODEL: ${{ inputs.model }}
+          MODEL: ${{ inputs.model || 'gpt-oss-20b' }}
         run: |
           set -e
           python -m pip install --disable-pip-version-check --no-cache-dir huggingface_hub
@@ -89,17 +93,17 @@ jobs:
 
       - name: Run inference and write answer to job log
         env:
-          PROMPT: ${{ inputs.prompt }}
-          MODEL: ${{ inputs.model }}
-          REASONING: ${{ inputs.reasoning }}
-          REQUEST_ID: ${{ inputs.request_id }}
+          PROMPT: ${{ inputs.prompt || 'Tes awal VinAI: jelaskan secara singkat apa itu GPT-OSS 20B.' }}
+          MODEL: ${{ inputs.model || 'gpt-oss-20b' }}
+          REASONING: ${{ inputs.reasoning || 'medium' }}
+          REQUEST_ID: ${{ inputs.request_id || github.run_id }}
         shell: bash
         run: |
           set +e
           SYSTEM_PROMPT="You are VinAI, a helpful AI assistant. Always answer in Indonesian unless the user asks for another language. Be accurate, clear, and concise."
           if [ "$MODEL" = "gpt-oss-20b" ]; then
             MODEL_PATH="model/gpt-oss-20b-MXFP4.gguf"
-            EXTRA_ARGS=(--jinja --chat-template-kwargs "{\"reasoning_effort\":\"$REASONING\"}")
+            EXTRA_ARGS=(--jinja --chat-template-kwargs "{\\"reasoning_effort\\":\\"$REASONING\\"}")
           else
             MODEL_PATH="model/Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf"
             EXTRA_ARGS=(--jinja)
@@ -123,5 +127,4 @@ jobs:
           echo
           echo "VINAI_RESULT_END:$REQUEST_ID"
           echo "VinAI inference exit code: $CODE"
-          # Keep the job successful so the client can always retrieve diagnostic logs.
           exit 0
